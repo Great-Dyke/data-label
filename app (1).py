@@ -21,7 +21,6 @@ from googleapiclient.http import MediaIoBaseDownload
 
 SPREADSHEET_ID = "1jHn1OBy5idSmxowZ9ldyO0KWIW_u-IPrp7_SzHRG8sY"
 SHEET_NAME = "Transcript Correction Tracker"
-CORRECTOR_NAMES = ["A", "B", "C", "D", "E", "F"]  # update with real names
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -158,16 +157,44 @@ if "current_row_num" not in st.session_state:
 
 # ── Name selection ───────────────────────────────────────────────────────
 
+if "show_name_picker" not in st.session_state:
+    # check the URL first — a personalized link (?name=Jane) is what makes the
+    # name "stick" across visits, since session_state alone resets every time
+    # someone closes the tab and comes back
+    url_name = st.query_params.get("name")
+    if url_name:
+        st.session_state.corrector_name = url_name
+        st.session_state.show_name_picker = False
+    else:
+        st.session_state.show_name_picker = True
+
 top_left, top_right = st.columns([3, 1])
+
 with top_left:
-    name = st.selectbox(
-        "Who's correcting?",
-        options=["— select —"] + CORRECTOR_NAMES,
-        index=0 if not st.session_state.corrector_name else CORRECTOR_NAMES.index(st.session_state.corrector_name) + 1,
-        label_visibility="collapsed",
-    )
-    if name != "— select —":
-        st.session_state.corrector_name = name
+    if st.session_state.show_name_picker:
+        typed_name = st.text_input(
+            "Enter your name",
+            label_visibility="collapsed",
+            placeholder="Your name",
+        )
+        if st.button("Continue"):
+            clean_name = typed_name.strip().title()
+            if clean_name:
+                st.session_state.corrector_name = clean_name
+                st.session_state.show_name_picker = False
+                st.query_params["name"] = clean_name
+                st.rerun()
+    else:
+        name_col, switch_col = st.columns([4, 1])
+        with name_col:
+            st.markdown(f"Correcting as **{st.session_state.corrector_name}**")
+        with switch_col:
+            if st.button("Switch", key="switch_user"):
+                # don't change corrector_name yet — only the dropdown reappears;
+                # the in-progress chunk (if any) stays correctly attributed to
+                # whoever currently holds it until a new name is actually picked
+                st.session_state.show_name_picker = True
+                st.rerun()
 
 with top_right:
     if st.session_state.corrector_name:
