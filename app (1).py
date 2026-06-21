@@ -127,11 +127,6 @@ st.markdown("""
         border-radius: 8px;
         width: 100%;
     }
-    div[data-testid="stButton"]:nth-of-type(2) button {
-        background-color: #d97757;
-        color: white;
-        border: none;
-    }
     .category-tag {
         color: #8b8f99;
         font-size: 0.85rem;
@@ -237,7 +232,7 @@ else:
             st.session_state.current_row = None
             st.rerun()
     with col2:
-        if st.button("Submit →"):
+        if st.button("Submit →", type="primary"):
             submit_correction(st.session_state.current_row_num, st.session_state.corrector_name, corrected_text)
             st.session_state.current_row = None
             st.rerun()
