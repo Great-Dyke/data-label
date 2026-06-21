@@ -21,7 +21,7 @@ from googleapiclient.http import MediaIoBaseDownload
 
 SPREADSHEET_ID = "1jHn1OBy5idSmxowZ9ldyO0KWIW_u-IPrp7_SzHRG8sY"
 SHEET_NAME = "Transcript Correction Tracker"
-CORRECTOR_NAMES = ["Jane", "Tendai", "Rudo", "Farai", "Chipo", "Tinashe"]  # update with real names
+CORRECTOR_NAMES = ["A", "B", "C", "D", "E", "F"]  # update with real names
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
