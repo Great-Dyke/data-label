@@ -19,8 +19,8 @@ from googleapiclient.http import MediaIoBaseDownload
 
 # ── Config — fill these in ───────────────────────────────────────────────
 
-SPREADSHEET_ID = "YOUR_SPREADSHEET_ID_HERE"
-SHEET_NAME = "Tasks"
+SPREADSHEET_ID = "1jHn1OBy5idSmxowZ9ldyO0KWIW_u-IPrp7_SzHRG8sY"
+SHEET_NAME = "Transcript Correction Tracker"
 CORRECTOR_NAMES = ["Jane", "Tendai", "Rudo", "Farai", "Chipo", "Tinashe"]  # update with real names
 
 SCOPES = [
