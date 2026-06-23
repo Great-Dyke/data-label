@@ -10,10 +10,12 @@ with access to both the Sheet and the Drive folder containing the audio.
 
 import io
 import base64
+import json
 from datetime import datetime, timezone
 
 import streamlit as st
 import gspread
+from gspread.utils import rowcol_to_a1
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -43,29 +45,7 @@ def get_clients():
 
 sheet, drive_service = get_clients()
 
-# ── Sheet helpers ─────────────────────────────────────────────────────────
-
-def get_all_rows():
-    return sheet.get_all_records()
-
-def find_row_index(rows, predicate):
-    for i, row in enumerate(rows):
-        if predicate(row):
-            return i + 2
-    return None
-
-def claim_next_chunk(corrector_name):
-    rows = get_all_rows()
-    row_num = find_row_index(
-        rows, lambda r: r["status"] == "in_progress" and r["assigned_to"] == corrector_name
-    )
-    if row_num is None:
-        row_num = find_row_index(rows, lambda r: r["status"] == "not_started")
-        if row_num is None:
-            return None
-        sheet.update_cell(row_num, header_index("status"), "in_progress")
-        sheet.update_cell(row_num, header_index("assigned_to"), corrector_name)
-    return sheet.row_values(row_num), row_num
+# ── Header index (cached) ─────────────────────────────────────────────────
 
 _header_cache = None
 
@@ -75,21 +55,87 @@ def header_index(col_name):
         _header_cache = sheet.row_values(1)
     return _header_cache.index(col_name) + 1
 
+def headers():
+    global _header_cache
+    if _header_cache is None:
+        _header_cache = sheet.row_values(1)
+    return _header_cache
+
+# ── Sheet helpers ─────────────────────────────────────────────────────────
+
+def claim_next_chunk(corrector_name):
+    """
+    Fetches all row values (no dicts — faster than get_all_records on large sheets)
+    and finds either an in-progress row for this corrector or the next not_started row.
+    """
+    all_rows = sheet.get_all_values()  # raw list of lists, no dict overhead
+    hdrs = all_rows[0]
+    status_col = hdrs.index("status")
+    assigned_col = hdrs.index("assigned_to")
+
+    in_progress_row_num = None
+    not_started_row_num = None
+
+    for i, row in enumerate(all_rows[1:], start=2):  # row 1 is header
+        status = row[status_col] if status_col < len(row) else ""
+        assigned = row[assigned_col] if assigned_col < len(row) else ""
+        if status == "in_progress" and assigned == corrector_name:
+            in_progress_row_num = i
+            break
+        if status == "not_started" and not_started_row_num is None:
+            not_started_row_num = i
+
+    row_num = in_progress_row_num or not_started_row_num
+    if row_num is None:
+        return None
+
+    if in_progress_row_num is None:
+        # claim it
+        sheet.update_cell(row_num, status_col + 1, "in_progress")
+        sheet.update_cell(row_num, assigned_col + 1, corrector_name)
+
+    row_values = sheet.row_values(row_num)
+    return row_values, row_num
+
 def submit_correction(row_num, corrector_name, corrected_text):
-    sheet.update_cell(row_num, header_index("status"), "done")
-    sheet.update_cell(row_num, header_index("corrected_transcript"), corrected_text)
-    sheet.update_cell(row_num, header_index("corrected_by"), corrector_name)
-    sheet.update_cell(row_num, header_index("corrected_at"), datetime.now(timezone.utc).isoformat())
+    """Single batch update — 1 API call instead of 4."""
+    col_status   = header_index("status")
+    col_text     = header_index("corrected_transcript")
+    col_by       = header_index("corrected_by")
+    col_at       = header_index("corrected_at")
+
+    start_a1 = rowcol_to_a1(row_num, col_status)
+    end_a1   = rowcol_to_a1(row_num, col_at)
+
+    sheet.update(
+        [[
+            "done",
+            corrected_text,
+            corrector_name,
+            datetime.now(timezone.utc).isoformat(),
+        ]],
+        f"{start_a1}:{end_a1}",
+    )
 
 def flag_chunk(row_num, corrector_name):
-    sheet.update_cell(row_num, header_index("status"), "flagged")
-    sheet.update_cell(row_num, header_index("corrected_by"), corrector_name)
-    sheet.update_cell(row_num, header_index("corrected_at"), datetime.now(timezone.utc).isoformat())
+    col_status = header_index("status")
+    col_by     = header_index("corrected_by")
+    col_at     = header_index("corrected_at")
+
+    start_a1 = rowcol_to_a1(row_num, col_status)
+    end_a1   = rowcol_to_a1(row_num, col_at)
+
+    sheet.update(
+        [["flagged", "", corrector_name, datetime.now(timezone.utc).isoformat()]],
+        f"{start_a1}:{end_a1}",
+    )
 
 def get_progress():
-    rows = get_all_rows()
-    done = sum(1 for r in rows if r["status"] == "done")
-    return done, len(rows)
+    """Lightweight progress count — fetches status column only."""
+    status_col_letter = rowcol_to_a1(1, header_index("status"))[0]  # e.g. "E"
+    values = sheet.col_values(header_index("status"))[1:]  # skip header
+    done = sum(1 for v in values if v == "done")
+    return done, len(values)
 
 # ── Drive audio fetch ────────────────────────────────────────────────────
 
@@ -104,48 +150,22 @@ def fetch_audio_bytes(drive_file_id):
     buf.seek(0)
     return buf.read()
 
-# ── Custom audio + textarea component ────────────────────────────────────
+# ── Custom audio player component (one-way, no return value) ──────────────
 
-def audio_editor_component(audio_bytes, draft_text, key="editor"):
-    """
-    Renders a custom HTML5 audio player with ±5s skip buttons and a
-    mobile-optimised textarea. Returns the submitted text or None.
-    """
+def audio_player_component(audio_bytes):
     audio_b64 = base64.b64encode(audio_bytes).decode()
-
     html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-  body {{
-    background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    padding: 0;
-  }}
-
-  /* ── Audio player ── */
+  body {{ background: transparent; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
   .player {{
     background: #23262e;
     border: 1px solid #3a3e48;
     border-radius: 12px;
     padding: 14px 16px;
-    margin-bottom: 14px;
   }}
-
-  audio {{
-    display: none;
-  }}
-
-  .controls {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }}
-
+  audio {{ display: none; }}
+  .controls {{ display: flex; align-items: center; gap: 10px; }}
   .ctrl-btn {{
     background: #2e3240;
     border: 1px solid #3a3e48;
@@ -162,7 +182,6 @@ def audio_editor_component(audio_bytes, draft_text, key="editor"):
     white-space: nowrap;
   }}
   .ctrl-btn:active {{ background: #3d4255; }}
-
   .play-btn {{
     background: #4f6ef7;
     border-color: #4f6ef7;
@@ -171,15 +190,7 @@ def audio_editor_component(audio_bytes, draft_text, key="editor"):
     flex-shrink: 0;
   }}
   .play-btn:active {{ background: #3d5ce0; }}
-
-  .progress-wrap {{
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
-  }}
-
+  .progress-wrap {{ flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }}
   .progress-bar {{
     -webkit-appearance: none;
     appearance: none;
@@ -193,87 +204,21 @@ def audio_editor_component(audio_bytes, draft_text, key="editor"):
   }}
   .progress-bar::-webkit-slider-thumb {{
     -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 16px; height: 16px;
     border-radius: 50%;
     background: #4f6ef7;
     cursor: pointer;
   }}
   .progress-bar::-moz-range-thumb {{
-    width: 16px;
-    height: 16px;
+    width: 16px; height: 16px;
     border-radius: 50%;
     background: #4f6ef7;
     cursor: pointer;
     border: none;
   }}
-
-  .time-label {{
-    color: #8b8f99;
-    font-size: 0.75rem;
-    font-variant-numeric: tabular-nums;
-  }}
-
-  /* ── Textarea ── */
-  .transcript-area {{
-    width: 100%;
-    min-height: 140px;
-    background: #23262e;
-    border: 1px solid #3a3e48;
-    border-radius: 12px;
-    color: #e8e6e1;
-    font-size: 16px;          /* 16px prevents iOS auto-zoom */
-    line-height: 1.6;
-    padding: 12px 14px;
-    resize: vertical;
-    outline: none;
-    font-family: inherit;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-y;
-    margin-bottom: 12px;
-    display: block;
-  }}
-  .transcript-area:focus {{
-    border-color: #4f6ef7;
-  }}
-
-  /* ── Buttons ── */
-  .btn-row {{
-    display: flex;
-    gap: 10px;
-  }}
-
-  .action-btn {{
-    flex: 1;
-    padding: 14px;
-    border-radius: 10px;
-    border: none;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
-    transition: opacity 0.15s;
-  }}
-  .action-btn:active {{ opacity: 0.75; }}
-
-  .flag-btn {{
-    background: #2e3240;
-    color: #8b8f99;
-    border: 1px solid #3a3e48;
-  }}
-
-  .submit-btn {{
-    background: #4f6ef7;
-    color: #fff;
-  }}
+  .time-label {{ color: #8b8f99; font-size: 0.75rem; font-variant-numeric: tabular-nums; }}
 </style>
-</head>
-<body>
-
 <audio id="audio" src="data:audio/wav;base64,{audio_b64}" preload="auto"></audio>
-
-<!-- Player -->
 <div class="player">
   <div class="controls">
     <button class="ctrl-btn" onclick="skip(-5)">⏪ 5s</button>
@@ -285,79 +230,35 @@ def audio_editor_component(audio_bytes, draft_text, key="editor"):
     </div>
   </div>
 </div>
-
-<!-- Transcript -->
-<textarea
-  class="transcript-area"
-  id="transcript"
-  placeholder="Edit transcript here…"
-  autocomplete="off"
-  autocorrect="off"
-  autocapitalize="off"
-  spellcheck="false"
->{draft_text}</textarea>
-
-<!-- Actions -->
-<div class="btn-row">
-  <button class="action-btn flag-btn" onclick="submitResult('flag')">Flag unclear</button>
-  <button class="action-btn submit-btn" onclick="submitResult('submit')">Submit →</button>
-</div>
-
 <script>
   const audio = document.getElementById('audio');
   const playBtn = document.getElementById('playBtn');
   const progressBar = document.getElementById('progressBar');
   const timeLabel = document.getElementById('timeLabel');
-
   function fmt(s) {{
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60).toString().padStart(2, '0');
     return m + ':' + sec;
   }}
-
   audio.addEventListener('timeupdate', () => {{
     if (!audio.duration) return;
     progressBar.value = (audio.currentTime / audio.duration) * 100;
     timeLabel.textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration);
   }});
-
   audio.addEventListener('ended', () => {{ playBtn.textContent = '▶'; }});
-
   progressBar.addEventListener('input', () => {{
     if (audio.duration) audio.currentTime = (progressBar.value / 100) * audio.duration;
   }});
-
   function togglePlay() {{
-    if (audio.paused) {{
-      audio.play();
-      playBtn.textContent = '⏸';
-    }} else {{
-      audio.pause();
-      playBtn.textContent = '▶';
-    }}
+    if (audio.paused) {{ audio.play(); playBtn.textContent = '⏸'; }}
+    else {{ audio.pause(); playBtn.textContent = '▶'; }}
   }}
-
   function skip(secs) {{
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + secs));
   }}
-
-  function submitResult(action) {{
-    const text = document.getElementById('transcript').value;
-    // Send result back to Streamlit via query param trick
-    const result = JSON.stringify({{ action: action, text: text }});
-    window.parent.postMessage({{
-      type: 'streamlit:setComponentValue',
-      value: result
-    }}, '*');
-  }}
 </script>
-</body>
-</html>
 """
-
-    result = components.html(html, height=380, scrolling=False)
-    return result
-
+    components.html(html, height=90, scrolling=False)
 
 # ── Page config & global styles ───────────────────────────────────────────
 
@@ -378,21 +279,25 @@ st.markdown("""
     font-size: 0.9rem;
     text-align: right;
   }
-  /* hide Streamlit default form elements we're replacing */
-  div[data-testid="stVerticalBlock"] iframe { border: none; }
+  iframe { border: none !important; }
+  /* Mobile textarea fixes */
+  textarea {
+    font-size: 16px !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────
 
-if "corrector_name" not in st.session_state:
-    st.session_state.corrector_name = None
-if "current_row" not in st.session_state:
-    st.session_state.current_row = None
-if "current_row_num" not in st.session_state:
-    st.session_state.current_row_num = None
-if "pending_action" not in st.session_state:
-    st.session_state.pending_action = None
+for key, default in [
+    ("corrector_name", None),
+    ("current_row", None),
+    ("current_row_num", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # ── Name selection ────────────────────────────────────────────────────────
 
@@ -432,7 +337,7 @@ with top_left:
 with top_right:
     if st.session_state.corrector_name:
         done, total = get_progress()
-        st.markdown(f"<div class='progress-tag'>{done}/{total}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-tag'>{done:,}/{total:,}</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -442,37 +347,39 @@ if not st.session_state.corrector_name:
     st.info("Enter your name above to start.")
 else:
     if st.session_state.current_row is None:
-        result = claim_next_chunk(st.session_state.corrector_name)
+        with st.spinner("Loading next chunk…"):
+            result = claim_next_chunk(st.session_state.corrector_name)
         if result is None:
             st.success("No chunks left — everything's been corrected. 🎉")
             st.stop()
         st.session_state.current_row, st.session_state.current_row_num = result
 
-    headers = sheet.row_values(1)
-    row_dict = dict(zip(headers, st.session_state.current_row))
+    row_dict = dict(zip(headers(), st.session_state.current_row))
 
-    st.markdown(f"<div class='category-tag'>{row_dict['category']}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='category-tag'>{row_dict.get('category', '')}</div>", unsafe_allow_html=True)
 
-    audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
-    draft = row_dict.get("scribe_transcript", "")
+    with st.spinner("Loading audio…"):
+        audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
 
-    # Render the custom component
-    component_value = audio_editor_component(audio_bytes, draft)
+    audio_player_component(audio_bytes)
 
-    # Handle result coming back from the component
-    if component_value is not None:
-        import json
-        try:
-            result = json.loads(component_value)
-            action = result.get("action")
-            text = result.get("text", "")
-            if action == "submit":
-                submit_correction(st.session_state.current_row_num, st.session_state.corrector_name, text)
-                st.session_state.current_row = None
-                st.rerun()
-            elif action == "flag":
+    corrected_text = st.text_area(
+        "Transcript",
+        value=row_dict.get("transcript", ""),
+        height=160,
+        label_visibility="collapsed",
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Flag unclear", use_container_width=True):
+            with st.spinner("Saving…"):
                 flag_chunk(st.session_state.current_row_num, st.session_state.corrector_name)
-                st.session_state.current_row = None
-                st.rerun()
-        except (json.JSONDecodeError, KeyError):
-            pass
+            st.session_state.current_row = None
+            st.rerun()
+    with col2:
+        if st.button("Submit →", type="primary", use_container_width=True):
+            with st.spinner("Saving…"):
+                submit_correction(st.session_state.current_row_num, st.session_state.corrector_name, corrected_text)
+            st.session_state.current_row = None
+            st.rerun()
