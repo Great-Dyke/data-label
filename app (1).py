@@ -232,11 +232,11 @@ def audio_player_component(audio_bytes: bytes):
 <audio id="audio" src="data:audio/wav;base64,{audio_b64}" preload="auto"></audio>
 <div class="player">
   <div class="controls">
-    <button class="ctrl-btn" onclick="skip(-5)">⏪ 5s</button>
-    <button class="play-btn ctrl-btn" id="playBtn" onclick="togglePlay()">▶</button>
-    <button class="ctrl-btn" onclick="skip(5)">5s ⏩</button>
+    <button class="ctrl-btn" onclick="skip(-5)" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">⏪ 5s</button>
+    <button class="play-btn ctrl-btn" id="playBtn" onclick="togglePlay()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">▶</button>
+    <button class="ctrl-btn" onclick="skip(5)" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">5s ⏩</button>
     <div class="progress-wrap">
-      <input class="progress-bar" type="range" id="progressBar" value="0" step="0.1">
+      <input class="progress-bar" type="range" id="progressBar" value="0" step="0.1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">
       <span class="time-label" id="timeLabel">0:00 / 0:00</span>
     </div>
   </div>
@@ -284,29 +284,26 @@ st.markdown("""
 </style>
 <script>
 (function() {
-  function attachKeepFocus() {
-    document.querySelectorAll('iframe').forEach(function(iframe) {
-      if (iframe._kbfix) return;
-      iframe._kbfix = true;
-      iframe.addEventListener('touchstart', function() {
-        var ta = document.querySelector('textarea');
-        if (ta) {
-          ta._savedSelection = { start: ta.selectionStart, end: ta.selectionEnd };
-        }
-      }, { passive: true });
-      iframe.addEventListener('touchend', function() {
-        var ta = document.querySelector('textarea');
-        if (ta && ta._savedSelection) {
-          setTimeout(function() {
-            ta.focus();
-            ta.setSelectionRange(ta._savedSelection.start, ta._savedSelection.end);
-          }, 50);
-        }
-      }, { passive: true });
-    });
-  }
-  attachKeepFocus();
-  new MutationObserver(attachKeepFocus).observe(document.body, { childList: true, subtree: true });
+  // Prevent anything except textarea itself from stealing keyboard focus
+  document.addEventListener('mousedown', function(e) {
+    if (e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+    }
+  }, true);
+  document.addEventListener('touchstart', function(e) {
+    if (e.target.tagName !== 'TEXTAREA') {
+      // Save and restore textarea focus after touch
+      var ta = document.querySelector('textarea');
+      if (ta && document.activeElement === ta) {
+        var start = ta.selectionStart;
+        var end = ta.selectionEnd;
+        setTimeout(function() {
+          ta.focus();
+          ta.setSelectionRange(start, end);
+        }, 50);
+      }
+    }
+  }, { passive: true, capture: true });
 })();
 </script>
 """, unsafe_allow_html=True)
