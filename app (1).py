@@ -365,7 +365,7 @@ else:
 
     corrected_text = st.text_area(
         "Transcript",
-        value=row_dict.get("transcript", ""),
+        value=row_dict.get("scribe_transcript", ""),
         height=160,
         label_visibility="collapsed",
     )
