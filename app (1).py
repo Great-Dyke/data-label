@@ -20,7 +20,6 @@ from gspread.utils import rowcol_to_a1
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import streamlit.components.v1 as components
 
 # ── Config ───────────────────────────────────────────────────────────────
 
@@ -272,7 +271,7 @@ def audio_player_component(audio_bytes: bytes):
   }}
 </script>
 """
-    components.html(html, height=90, scrolling=False)
+    st.iframe(html, height=90, scrolling=False)
 
 # ── Page config & styles ──────────────────────────────────────────────────
 
@@ -316,7 +315,7 @@ top_left, top_right = st.columns([3, 1])
 
 with top_left:
     if st.session_state.show_name_picker:
-        typed_name = st.text_input("", placeholder="Your name", label_visibility="collapsed")
+        typed_name = st.text_input("Your name", placeholder="Your name", label_visibility="collapsed")
         if st.button("Continue"):
             clean_name = typed_name.strip().title()
             if clean_name:
