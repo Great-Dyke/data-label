@@ -280,8 +280,35 @@ st.markdown("""
   .category-tag { color: #8b8f99; font-size: 0.85rem; text-transform: lowercase; letter-spacing: 0.02em; margin-bottom: 10px; }
   .progress-tag { color: #8b8f99; font-size: 0.9rem; text-align: right; }
   iframe { border: none !important; }
-  textarea { font-size: 16px !important; -webkit-overflow-scrolling: touch !important; touch-action: pan-y !important; }
+  textarea { font-size: 16px !important; -webkit-overflow-scrolling: touch !important; touch-action: pan-y !important; -webkit-user-select: text !important; user-select: text !important; }
 </style>
+<script>
+(function() {
+  function attachKeepFocus() {
+    document.querySelectorAll('iframe').forEach(function(iframe) {
+      if (iframe._kbfix) return;
+      iframe._kbfix = true;
+      iframe.addEventListener('touchstart', function() {
+        var ta = document.querySelector('textarea');
+        if (ta) {
+          ta._savedSelection = { start: ta.selectionStart, end: ta.selectionEnd };
+        }
+      }, { passive: true });
+      iframe.addEventListener('touchend', function() {
+        var ta = document.querySelector('textarea');
+        if (ta && ta._savedSelection) {
+          setTimeout(function() {
+            ta.focus();
+            ta.setSelectionRange(ta._savedSelection.start, ta._savedSelection.end);
+          }, 50);
+        }
+      }, { passive: true });
+    });
+  }
+  attachKeepFocus();
+  new MutationObserver(attachKeepFocus).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
 """, unsafe_allow_html=True)
 
 # ── Session state defaults ────────────────────────────────────────────────
