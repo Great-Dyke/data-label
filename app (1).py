@@ -10,7 +10,7 @@ with access to both the Sheet and the Drive folder containing the audio.
 
 import io
 import base64
-import json
+import threading
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -64,11 +64,7 @@ def headers():
 # ── Sheet helpers ─────────────────────────────────────────────────────────
 
 def claim_next_chunk(corrector_name):
-    """
-    Fetches all row values (no dicts — faster than get_all_records on large sheets)
-    and finds either an in-progress row for this corrector or the next not_started row.
-    """
-    all_rows = sheet.get_all_values()  # raw list of lists, no dict overhead
+    all_rows = sheet.get_all_values()
     hdrs = all_rows[0]
     status_col = hdrs.index("status")
     assigned_col = hdrs.index("assigned_to")
@@ -76,7 +72,7 @@ def claim_next_chunk(corrector_name):
     in_progress_row_num = None
     not_started_row_num = None
 
-    for i, row in enumerate(all_rows[1:], start=2):  # row 1 is header
+    for i, row in enumerate(all_rows[1:], start=2):
         status = row[status_col] if status_col < len(row) else ""
         assigned = row[assigned_col] if assigned_col < len(row) else ""
         if status == "in_progress" and assigned == corrector_name:
@@ -87,60 +83,98 @@ def claim_next_chunk(corrector_name):
 
     row_num = in_progress_row_num or not_started_row_num
     if row_num is None:
-        return None
+        return None, None
 
     if in_progress_row_num is None:
-        # claim it
         sheet.update_cell(row_num, status_col + 1, "in_progress")
         sheet.update_cell(row_num, assigned_col + 1, corrector_name)
 
     row_values = sheet.row_values(row_num)
     return row_values, row_num
 
-def submit_correction(row_num, corrector_name, corrected_text):
-    """Single batch update — 1 API call instead of 4."""
-    col_status   = header_index("status")
-    col_text     = header_index("corrected_transcript")
-    col_by       = header_index("corrected_by")
-    col_at       = header_index("corrected_at")
+def peek_next_file_id(corrector_name, current_row_num):
+    """
+    Looks ahead in the sheet for the next not_started row after current_row_num.
+    Returns its drive_file_id so we can prefetch audio in the background.
+    """
+    try:
+        all_rows = sheet.get_all_values()
+        hdrs = all_rows[0]
+        status_col = hdrs.index("status")
+        file_id_col = hdrs.index("drive_file_id")
 
-    start_a1 = rowcol_to_a1(row_num, col_status)
-    end_a1   = rowcol_to_a1(row_num, col_at)
+        for i, row in enumerate(all_rows[1:], start=2):
+            if i <= current_row_num:
+                continue
+            status = row[status_col] if status_col < len(row) else ""
+            if status == "not_started":
+                return row[file_id_col] if file_id_col < len(row) else None
+    except Exception:
+        pass
+    return None
 
-    sheet.update(
-        [[
-            "done",
-            corrected_text,
-            corrector_name,
-            datetime.now(timezone.utc).isoformat(),
-        ]],
-        f"{start_a1}:{end_a1}",
+def _write_correction_bg(row_num, corrector_name, corrected_text):
+    """Runs in a background thread — sheet write without blocking UI."""
+    try:
+        col_status = header_index("status")
+        col_text   = header_index("corrected_transcript")
+        col_by     = header_index("corrected_by")
+        col_at     = header_index("corrected_at")
+        start_a1   = rowcol_to_a1(row_num, col_status)
+        end_a1     = rowcol_to_a1(row_num, col_at)
+        sheet.update(
+            [[
+                "done",
+                corrected_text,
+                corrector_name,
+                datetime.now(timezone.utc).isoformat(),
+            ]],
+            f"{start_a1}:{end_a1}",
+        )
+    except Exception as e:
+        # Log but don't crash — UI has already moved on
+        print(f"[bg write error] {e}")
+
+def _write_flag_bg(row_num, corrector_name):
+    """Runs in a background thread."""
+    try:
+        col_status = header_index("status")
+        col_by     = header_index("corrected_by")
+        col_at     = header_index("corrected_at")
+        start_a1   = rowcol_to_a1(row_num, col_status)
+        end_a1     = rowcol_to_a1(row_num, col_at)
+        sheet.update(
+            [["flagged", "", corrector_name, datetime.now(timezone.utc).isoformat()]],
+            f"{start_a1}:{end_a1}",
+        )
+    except Exception as e:
+        print(f"[bg flag error] {e}")
+
+def submit_correction_async(row_num, corrector_name, corrected_text):
+    t = threading.Thread(
+        target=_write_correction_bg,
+        args=(row_num, corrector_name, corrected_text),
+        daemon=True,
     )
+    t.start()
 
-def flag_chunk(row_num, corrector_name):
-    col_status = header_index("status")
-    col_by     = header_index("corrected_by")
-    col_at     = header_index("corrected_at")
-
-    start_a1 = rowcol_to_a1(row_num, col_status)
-    end_a1   = rowcol_to_a1(row_num, col_at)
-
-    sheet.update(
-        [["flagged", "", corrector_name, datetime.now(timezone.utc).isoformat()]],
-        f"{start_a1}:{end_a1}",
+def flag_chunk_async(row_num, corrector_name):
+    t = threading.Thread(
+        target=_write_flag_bg,
+        args=(row_num, corrector_name),
+        daemon=True,
     )
+    t.start()
 
 def get_progress():
-    """Lightweight progress count — fetches status column only."""
-    status_col_letter = rowcol_to_a1(1, header_index("status"))[0]  # e.g. "E"
-    values = sheet.col_values(header_index("status"))[1:]  # skip header
+    values = sheet.col_values(header_index("status"))[1:]
     done = sum(1 for v in values if v == "done")
     return done, len(values)
 
 # ── Drive audio fetch ────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def fetch_audio_bytes(drive_file_id):
+def fetch_audio_bytes(drive_file_id: str) -> bytes:
     request = drive_service.files().get_media(fileId=drive_file_id)
     buf = io.BytesIO()
     downloader = MediaIoBaseDownload(buf, request)
@@ -150,9 +184,18 @@ def fetch_audio_bytes(drive_file_id):
     buf.seek(0)
     return buf.read()
 
-# ── Custom audio player component (one-way, no return value) ──────────────
+def prefetch_next_audio(drive_file_id: str):
+    """Warms the cache for the next chunk's audio in a background thread."""
+    def _fetch():
+        try:
+            fetch_audio_bytes(drive_file_id)
+        except Exception as e:
+            print(f"[prefetch error] {e}")
+    threading.Thread(target=_fetch, daemon=True).start()
 
-def audio_player_component(audio_bytes):
+# ── Custom audio player component ─────────────────────────────────────────
+
+def audio_player_component(audio_bytes: bytes):
     audio_b64 = base64.b64encode(audio_bytes).decode()
     html = f"""
 <style>
@@ -280,7 +323,6 @@ st.markdown("""
     text-align: right;
   }
   iframe { border: none !important; }
-  /* Mobile textarea fixes */
   textarea {
     font-size: 16px !important;
     -webkit-overflow-scrolling: touch !important;
@@ -346,20 +388,30 @@ st.divider()
 if not st.session_state.corrector_name:
     st.info("Enter your name above to start.")
 else:
+    # Claim chunk if we don't have one
     if st.session_state.current_row is None:
-        with st.spinner("Loading next chunk…"):
-            result = claim_next_chunk(st.session_state.corrector_name)
+        with st.spinner("Loading…"):
+            result, row_num = claim_next_chunk(st.session_state.corrector_name)
         if result is None:
             st.success("No chunks left — everything's been corrected. 🎉")
             st.stop()
-        st.session_state.current_row, st.session_state.current_row_num = result
+        st.session_state.current_row = result
+        st.session_state.current_row_num = row_num
 
     row_dict = dict(zip(headers(), st.session_state.current_row))
 
-    st.markdown(f"<div class='category-tag'>{row_dict.get('category', '')}</div>", unsafe_allow_html=True)
+    # Fetch current audio (likely already cached after first load)
+    audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
 
-    with st.spinner("Loading audio…"):
-        audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
+    # Prefetch next chunk's audio in background while corrector works
+    next_file_id = peek_next_file_id(
+        st.session_state.corrector_name,
+        st.session_state.current_row_num
+    )
+    if next_file_id:
+        prefetch_next_audio(next_file_id)
+
+    st.markdown(f"<div class='category-tag'>{row_dict.get('category', '')}</div>", unsafe_allow_html=True)
 
     audio_player_component(audio_bytes)
 
@@ -373,13 +425,19 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Flag unclear", use_container_width=True):
-            with st.spinner("Saving…"):
-                flag_chunk(st.session_state.current_row_num, st.session_state.corrector_name)
+            # Fire sheet write in background, move on instantly
+            flag_chunk_async(st.session_state.current_row_num, st.session_state.corrector_name)
             st.session_state.current_row = None
+            st.session_state.current_row_num = None
             st.rerun()
     with col2:
         if st.button("Submit →", type="primary", use_container_width=True):
-            with st.spinner("Saving…"):
-                submit_correction(st.session_state.current_row_num, st.session_state.corrector_name, corrected_text)
+            # Fire sheet write in background, move on instantly
+            submit_correction_async(
+                st.session_state.current_row_num,
+                st.session_state.corrector_name,
+                corrected_text,
+            )
             st.session_state.current_row = None
+            st.session_state.current_row_num = None
             st.rerun()
