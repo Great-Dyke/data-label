@@ -175,14 +175,23 @@ def flag_chunk_async(row_num, corrector_name):
 
 @st.cache_data(show_spinner=False, max_entries=10)
 def fetch_audio_bytes(drive_file_id: str) -> bytes:
-    request = drive_service.files().get_media(fileId=drive_file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    buf.seek(0)
-    return buf.read()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            request = drive_service.files().get_media(fileId=drive_file_id)
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            buf.seek(0)
+            return buf.read()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1.5 ** attempt)  # 1s, 1.5s backoff
+            else:
+                raise
 
 def prefetch_audio_bg(file_ids: list):
     """Fire-and-forget: warm cache for upcoming chunks."""
