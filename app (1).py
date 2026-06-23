@@ -271,7 +271,7 @@ def audio_player_component(audio_bytes: bytes):
   }}
 </script>
 """
-    st.iframe(html, height=90, scrolling=False)
+    st.iframe(html, height=90)
 
 # ── Page config & styles ──────────────────────────────────────────────────
 
