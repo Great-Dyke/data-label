@@ -133,26 +133,24 @@ def claim_next_from_queue(corrector_name: str):
 
 def _write_correction_bg(row_num, corrector_name, corrected_text):
     try:
-        col_status = header_index("status")
-        col_text   = header_index("corrected_transcript")
-        col_by     = header_index("corrected_by")
-        col_at     = header_index("corrected_at")
-        sheet.update(
-            [["done", corrected_text, corrector_name, datetime.now(timezone.utc).isoformat()]],
-            f"{rowcol_to_a1(row_num, col_status)}:{rowcol_to_a1(row_num, col_at)}",
-        )
+        now = datetime.now(timezone.utc).isoformat()
+        sheet.batch_update([
+            {"range": rowcol_to_a1(row_num, header_index("status")),               "values": [["done"]]},
+            {"range": rowcol_to_a1(row_num, header_index("corrected_transcript")), "values": [[corrected_text]]},
+            {"range": rowcol_to_a1(row_num, header_index("corrected_by")),         "values": [[corrector_name]]},
+            {"range": rowcol_to_a1(row_num, header_index("corrected_at")),         "values": [[now]]},
+        ])
     except Exception as e:
         print(f"[bg write error] {e}")
 
 def _write_flag_bg(row_num, corrector_name):
     try:
-        col_status = header_index("status")
-        col_by     = header_index("corrected_by")
-        col_at     = header_index("corrected_at")
-        sheet.update(
-            [["flagged", "", corrector_name, datetime.now(timezone.utc).isoformat()]],
-            f"{rowcol_to_a1(row_num, col_status)}:{rowcol_to_a1(row_num, col_at)}",
-        )
+        now = datetime.now(timezone.utc).isoformat()
+        sheet.batch_update([
+            {"range": rowcol_to_a1(row_num, header_index("status")),       "values": [["flagged"]]},
+            {"range": rowcol_to_a1(row_num, header_index("corrected_by")), "values": [[corrector_name]]},
+            {"range": rowcol_to_a1(row_num, header_index("corrected_at")), "values": [[now]]},
+        ])
     except Exception as e:
         print(f"[bg flag error] {e}")
 
