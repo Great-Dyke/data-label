@@ -454,7 +454,7 @@ else:
     st.markdown(f"<div class='category-tag'>{row_dict['category']}</div>", unsafe_allow_html=True)
 
     audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
-    draft = row_dict.get("transcript", "")
+    draft = row_dict.get("scribe_transcript", "")
 
     # Render the custom component
     component_value = audio_editor_component(audio_bytes, draft)
