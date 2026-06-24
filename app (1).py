@@ -284,6 +284,11 @@ st.markdown("""
   #MainMenu {visibility: hidden;}
   footer {visibility: hidden;}
   header {visibility: hidden;}
+  [data-testid="stToolbar"] {visibility: hidden;}
+  [data-testid="stDecoration"] {visibility: hidden;}
+  [data-testid="stStatusWidget"] {visibility: hidden;}
+  [data-testid="collapsedControl"] {display: none;}
+  section[data-testid="stSidebar"] {display: none;}
 </style>
 <script>
 (function() {
