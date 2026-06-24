@@ -62,24 +62,18 @@ def header_index(col_name):
 # ── Queue bootstrap — runs ONCE per session ───────────────────────────────
 
 def bootstrap_queue(corrector_name: str):
-    """
-    Downloads the full sheet once, finds:
-      - any in-progress row for this corrector (goes to front)
-      - all not_started rows (queued in order)
-    Stores a deque of (row_num, row_dict) in session_state.
-    Also counts done rows for the progress counter.
-    Never called again after first load.
-    """
     all_rows = sheet.get_all_values()
     hdrs = all_rows[0]
     status_col    = hdrs.index("status")
     assigned_col  = hdrs.index("assigned_to")
     file_id_col   = hdrs.index("drive_file_id")
+    corrected_by_col = hdrs.index("corrected_by") if "corrected_by" in hdrs else -1
 
     in_progress = None
     queue = deque()
     done_count = 0
     total_count = len(all_rows) - 1
+    my_count = 0
 
     for i, row in enumerate(all_rows[1:], start=2):
         status   = row[status_col]   if status_col   < len(row) else ""
@@ -92,29 +86,29 @@ def bootstrap_queue(corrector_name: str):
         elif status == "not_started":
             queue.append((i, dict(zip(hdrs, row))))
 
+        if status == "done" and corrected_by_col >= 0:
+            corrected_by = row[corrected_by_col] if corrected_by_col < len(row) else ""
+            if corrected_by == corrector_name:
+                my_count += 1
+
     if in_progress:
         queue.appendleft(in_progress)
 
     st.session_state.chunk_queue    = queue
     st.session_state.done_count     = done_count
     st.session_state.total_count    = total_count
+    st.session_state.my_count       = my_count
     st.session_state.queue_loaded   = True
 
 # ── Claim next from local queue (no network call) ─────────────────────────
 
 def claim_next_from_queue(corrector_name: str):
-    """
-    Pops the next chunk from the local queue.
-    Fires a background write to mark it in_progress in the sheet.
-    Returns (row_num, row_dict) or (None, None).
-    """
     queue = st.session_state.chunk_queue
     if not queue:
         return None, None
 
     row_num, row_dict = queue.popleft()
 
-    # Mark in_progress in background — don't block
     def _claim():
         try:
             col_s = header_index("status")
@@ -186,12 +180,11 @@ def fetch_audio_bytes(drive_file_id: str) -> bytes:
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
-                time.sleep(1.5 ** attempt)  # 1s, 1.5s backoff
+                time.sleep(1.5 ** attempt)
             else:
                 raise
 
 def prefetch_audio_bg(file_ids: list):
-    """Fire-and-forget: warm cache for upcoming chunks."""
     def _fetch():
         for fid in file_ids:
             try:
@@ -298,12 +291,10 @@ st.markdown("""
   .styles_viewerBadge__1yB5_ {display: none !important;}
   .viewerBadge_link__qRIco {display: none !important;}
   .viewerBadge_text__1CPSC {display: none !important;}
-  /* nuclear option — hide anything with github in the href */
   a[href*="github"] {display: none !important;}
 </style>
 <script>
 (function() {
-  // Prevent anything except textarea itself from stealing keyboard focus
   document.addEventListener('mousedown', function(e) {
     if (e.target.tagName !== 'TEXTAREA') {
       e.preventDefault();
@@ -311,7 +302,6 @@ st.markdown("""
   }, true);
   document.addEventListener('touchstart', function(e) {
     if (e.target.tagName !== 'TEXTAREA') {
-      // Save and restore textarea focus after touch
       var ta = document.querySelector('textarea');
       if (ta && document.activeElement === ta) {
         var start = ta.selectionStart;
@@ -336,6 +326,7 @@ for key, default in [
     ("chunk_queue", deque()),
     ("done_count", 0),
     ("total_count", 0),
+    ("my_count", 0),
     ("current_row_num", None),
     ("current_row_dict", None),
 ]:
@@ -362,7 +353,7 @@ with top_left:
             if clean_name:
                 st.session_state.corrector_name = clean_name
                 st.session_state.show_name_picker = False
-                st.session_state.queue_loaded = False  # force reload for new name
+                st.session_state.queue_loaded = False
                 st.query_params["name"] = clean_name
                 st.rerun()
     else:
@@ -376,9 +367,14 @@ with top_left:
 
 with top_right:
     if st.session_state.corrector_name and st.session_state.queue_loaded:
-        done  = st.session_state.done_count
-        total = st.session_state.total_count
-        st.markdown(f"<div class='progress-tag'>{done:,}/{total:,}</div>", unsafe_allow_html=True)
+        done     = st.session_state.done_count
+        total    = st.session_state.total_count
+        my_count = st.session_state.my_count
+        st.markdown(
+            f"<div class='progress-tag'>{done:,}/{total:,}</div>"
+            f"<div class='progress-tag' style='color:#4f6ef7;font-weight:600;'>you: {my_count:,}</div>",
+            unsafe_allow_html=True
+        )
 
 st.divider()
 
@@ -387,13 +383,11 @@ st.divider()
 if not st.session_state.corrector_name:
     st.info("Enter your name above to start.")
 else:
-    # ── One-time queue bootstrap (the only blocking sheet read) ───────────
     if not st.session_state.queue_loaded:
         with st.spinner("Setting up your queue…"):
             bootstrap_queue(st.session_state.corrector_name)
         st.rerun()
 
-    # ── Claim next chunk from local queue (instant, no network) ───────────
     if st.session_state.current_row_dict is None:
         row_num, row_dict = claim_next_from_queue(st.session_state.corrector_name)
         if row_dict is None:
@@ -402,7 +396,6 @@ else:
         st.session_state.current_row_num  = row_num
         st.session_state.current_row_dict = row_dict
 
-        # Prefetch audio for next PREFETCH_AHEAD chunks in background
         upcoming_ids = [
             r["drive_file_id"]
             for _, r in list(st.session_state.chunk_queue)[:PREFETCH_AHEAD]
@@ -413,10 +406,8 @@ else:
 
     row_dict = st.session_state.current_row_dict
 
-    # ── Render ────────────────────────────────────────────────────────────
     st.markdown(f"<div class='category-tag'>{row_dict.get('category', '')}</div>", unsafe_allow_html=True)
 
-    # Audio fetch — instant if prefetch already ran, one Drive call otherwise
     audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
     audio_player_component(audio_bytes)
 
@@ -432,6 +423,7 @@ else:
         if st.button("Flag unclear", use_container_width=True):
             flag_chunk_async(st.session_state.current_row_num, st.session_state.corrector_name)
             st.session_state.done_count += 1
+            st.session_state.my_count   += 1
             st.session_state.current_row_dict = None
             st.session_state.current_row_num  = None
             st.rerun()
@@ -443,6 +435,7 @@ else:
                 corrected_text,
             )
             st.session_state.done_count += 1
+            st.session_state.my_count   += 1
             st.session_state.current_row_dict = None
             st.session_state.current_row_num  = None
             st.rerun()
