@@ -408,7 +408,14 @@ else:
 
     st.markdown(f"<div class='category-tag'>{row_dict.get('category', '')}</div>", unsafe_allow_html=True)
 
-    audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
+    try:
+        audio_bytes = fetch_audio_bytes(row_dict["drive_file_id"])
+    except Exception:
+        st.warning("Audio failed to load — tap below to retry.")
+        if st.button("Retry audio"):
+            st.cache_data.clear()
+            st.rerun()
+        st.stop()
     audio_player_component(audio_bytes)
 
     corrected_text = st.text_area(
