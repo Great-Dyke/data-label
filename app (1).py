@@ -273,7 +273,7 @@ def audio_player_component(audio_bytes: bytes):
 
 # ── Page config & styles ──────────────────────────────────────────────────
 
-st.set_page_config(page_title="Inzwi Correction", layout="centered")
+st.set_page_config(page_title="Okavango", layout="centered")
 st.markdown("""
 <style>
   .stApp { background-color: #1a1d23; color: #e8e6e1; }
