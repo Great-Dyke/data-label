@@ -289,12 +289,17 @@ st.markdown("""
   [data-testid="stStatusWidget"] {visibility: hidden;}
   [data-testid="collapsedControl"] {display: none;}
   section[data-testid="stSidebar"] {display: none;}
-  #GithubIcon {visibility: hidden;}
-  [data-testid="stHeader"] {display: none;}
-  .viewerBadge_container__1QSob {display: none;}
-  .styles_viewerBadge__1yB5_ {display: none;}
-  .viewerBadge_link__qRIco {display: none;}
-  .viewerBadge_text__1CPSC {display: none;}
+  #GithubIcon {display: none !important;}
+  [data-testid="stHeader"] {display: none !important;}
+  [data-testid="stToolbar"] {display: none !important;}
+  [data-testid="stDecoration"] {display: none !important;}
+  [data-testid="stStatusWidget"] {display: none !important;}
+  .viewerBadge_container__1QSob {display: none !important;}
+  .styles_viewerBadge__1yB5_ {display: none !important;}
+  .viewerBadge_link__qRIco {display: none !important;}
+  .viewerBadge_text__1CPSC {display: none !important;}
+  /* nuclear option — hide anything with github in the href */
+  a[href*="github"] {display: none !important;}
 </style>
 <script>
 (function() {
