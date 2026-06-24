@@ -281,6 +281,9 @@ st.markdown("""
   .progress-tag { color: #8b8f99; font-size: 0.9rem; text-align: right; }
   iframe { border: none !important; }
   textarea { font-size: 16px !important; -webkit-overflow-scrolling: touch !important; touch-action: pan-y !important; -webkit-user-select: text !important; user-select: text !important; }
+  #MainMenu {visibility: hidden;}
+  footer {visibility: hidden;}
+  header {visibility: hidden;}
 </style>
 <script>
 (function() {
