@@ -232,11 +232,11 @@ def audio_player_component(audio_bytes: bytes):
 <audio id="audio" src="data:audio/wav;base64,{audio_b64}" preload="auto"></audio>
 <div class="player">
   <div class="controls">
-    <button class="ctrl-btn" onclick="skip(-5)" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">⏪ 5s</button>
-    <button class="play-btn ctrl-btn" id="playBtn" onclick="togglePlay()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">▶</button>
-    <button class="ctrl-btn" onclick="skip(5)" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">5s ⏩</button>
+    <button class="ctrl-btn" onclick="skip(-5)">⏪ 5s</button>
+    <button class="play-btn ctrl-btn" id="playBtn" onclick="togglePlay()">▶</button>
+    <button class="ctrl-btn" onclick="skip(5)">5s ⏩</button>
     <div class="progress-wrap">
-      <input class="progress-bar" type="range" id="progressBar" value="0" step="0.1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">
+      <input class="progress-bar" type="range" id="progressBar" value="0" step="0.1">
       <span class="time-label" id="timeLabel">0:00 / 0:00</span>
     </div>
   </div>
