@@ -289,6 +289,12 @@ st.markdown("""
   [data-testid="stStatusWidget"] {visibility: hidden;}
   [data-testid="collapsedControl"] {display: none;}
   section[data-testid="stSidebar"] {display: none;}
+  #GithubIcon {visibility: hidden;}
+  [data-testid="stHeader"] {display: none;}
+  .viewerBadge_container__1QSob {display: none;}
+  .styles_viewerBadge__1yB5_ {display: none;}
+  .viewerBadge_link__qRIco {display: none;}
+  .viewerBadge_text__1CPSC {display: none;}
 </style>
 <script>
 (function() {
